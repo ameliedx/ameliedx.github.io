@@ -351,6 +351,11 @@ var mixer = null;
 /* ====================
    Animation loop (renderer.setAnimationLoop used for XR compatibility)
    ==================== */
+
+// === VR Camera Rig ===
+// This group represents the user's body in VR; it contains the camera and follows the headset.
+
+
 var animate = function (timestamp) {
     var gl = renderer.getContext();
 
@@ -359,43 +364,53 @@ var animate = function (timestamp) {
 
     // If in XR and presenting, sync head position with XR camera
     if (renderer.xr && renderer.xr.isPresenting) {
-        // get the Three.js XR camera (a Camera or ArrayCamera)
+        // Get the Three.js XR camera (a Camera or ArrayCamera)
         try {
             const xrCamera = renderer.xr.getCamera();
-            // global head position (approximate) from xrCamera.matrixWorld
             const head = eyeScene.getObjectByName("Head");
-            if (head && xrCamera) {
+
+            if (xrCamera) {
+                // Extract position and rotation from the XR camera
                 const pos = new THREE.Vector3();
-                pos.setFromMatrixPosition(xrCamera.matrixWorld);
-                head.position.copy(pos);
-                // Optionally rotate the head to match headset orientation:
-                head.setRotationFromMatrix(xrCamera.matrixWorld);
+                const rot = new THREE.Quaternion();
+                const scale = new THREE.Vector3();
+                xrCamera.matrixWorld.decompose(pos, rot, scale);
+
+                // Update VR rig position and rotation
+                vrRig.position.copy(pos);
+                vrRig.quaternion.copy(rot);
+            }
+
+            // Update the virtual head to follow the VR rig
+            if (head) {
+                head.position.copy(vrRig.position);
+                head.quaternion.copy(vrRig.quaternion);
             }
         } catch (e) {
-            // ignore if not available
+            // Ignore if not available
         }
     }
 
-    // 1. render scene objects (third-person view)
+    // 1. Render main scene objects (third-person view)
     renderer.setClearColor(0x808080);
     renderer.clear();
     if (showScene) renderer.render(scene, camera);
 
-    // 2. render scene onto each display target (stereo)
+    // 2. Render scene onto each display target (stereo)
     for (let [index, displaySurface] of displaySurfaces.entries()) {
         renderer.setRenderTarget(displaySurfaceTargets[index]);
         renderer.setClearColor(0x404040);
         renderer.clear();
 
-        // left eye -> RED channel
+        // Left eye -> RED channel
         gl.colorMask(1, 0, 0, 0);
-        var eye = getLeftEyePosition();
-        var view = displaySurface.viewMatrix(eye);
-        var proj = displaySurface.projectionMatrix(eye, 1, 10000);
-        var leftCamera = cameraFromViewProj(view, proj);
+        var eyeL = getLeftEyePosition();
+        var viewL = displaySurface.viewMatrix(eyeL);
+        var projL = displaySurface.projectionMatrix(eyeL, 1, 10000);
+        var leftCamera = cameraFromViewProj(viewL, projL);
         renderer.render(scene, leftCamera);
 
-        // right eye -> GREEN+BLUE channels
+        // Right eye -> GREEN + BLUE channels
         gl.colorMask(0, 1, 1, 0);
         var eyeR = getRightEyePosition();
         var viewR = displaySurface.viewMatrix(eyeR);
@@ -410,14 +425,15 @@ var animate = function (timestamp) {
     renderer.setRenderTarget(null);
     renderer.setClearColor(0x000000);
 
-    // 3. render textured display surfaces (the CAVE walls)
+    // 3. Render textured display surfaces (the CAVE walls)
     renderer.render(displaySurfaceScene, camera);
 
-    // 4. render eyes/head
+    // 4. Render eyes/head
     renderer.render(eyeScene, camera);
 
     // When using setAnimationLoop, do not call requestAnimationFrame here.
 };
+
 
 /* ====================
    Keyboard events
@@ -454,6 +470,12 @@ createDisplaySurfaceTargets();
 createDisplaySurfaceScene();
 createEyeScene();
 createScene();
+
+var vrRig = new THREE.Group();
+vrRig.name = "VRRig";
+vrRig.add(camera);
+scene.add(vrRig);
+
 createCamera();
 enableOrbitCamera(camera, renderer);
 addDragControlToObjects();
