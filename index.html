@@ -95,24 +95,56 @@ function updateWallAngle() {
   const vBase = new THREE.Vector3(0, 300, 0);
   const axisY = new THREE.Vector3(0,1,0);
 
+  // === LEFT WALL ===
   const B_left = new THREE.Vector3(-150, -150, -150);
   const A_base_left = new THREE.Vector3(-150, -150, +150);
   const u_base_left = new THREE.Vector3(0,0,-300);
-
   const A_new_left = rotatePointAroundAxis(A_base_left, B_left, axisY, wallAngle - Math.PI/2);
   const u_new_left = rotateVectorAroundAxis(u_base_left, axisY, wallAngle - Math.PI/2);
-
   leftWall.origin.copy(A_new_left);
   leftWall.u.copy(u_new_left);
   leftWall.v.copy(vBase);
 
+  // === RIGHT WALL ===
   const rightOrigin = new THREE.Vector3(150, -150, -150);
-  const rightU = new THREE.Vector3(0, 0, 300);
-  rightU.applyAxisAngle(axisY, Math.PI / 2 - wallAngle);
+  const rightU = new THREE.Vector3(0,0,300).applyAxisAngle(axisY, Math.PI/2 - wallAngle);
   rightWall.origin.copy(rightOrigin);
   rightWall.u.copy(rightU);
   rightWall.v.copy(vBase);
+
+  // === UPDATE GEOMETRIES ===
+  for (let cube of displaySurfaceScene.children) {
+    const surf = displaySurfaces.find(d => d.name === cube.name);
+    if (!surf) continue;
+
+    let p0, p1, p2, p3;
+
+    if (surf.name === "Floor") {
+      const v_BL = leftWall.origin;
+      const v_FL = leftWall.origin.clone().add(leftWall.u);
+      const v_FR = rightWall.origin;
+      const v_BR = rightWall.origin.clone().add(rightWall.u);
+      p0 = v_BL; p1 = v_BR; p2 = v_FR; p3 = v_FL;
+    } else {
+      const origin = surf.origin;
+      const u = surf.u;
+      const v = surf.v;
+      p0 = origin; 
+      p1 = origin.clone().add(u);
+      p2 = origin.clone().add(u).add(v);
+      p3 = origin.clone().add(v);
+    }
+
+    const posAttr = cube.geometry.getAttribute('position');
+    posAttr.setXYZ(0, p0.x, p0.y, p0.z);
+    posAttr.setXYZ(1, p1.x, p1.y, p1.z);
+    posAttr.setXYZ(2, p2.x, p2.y, p2.z);
+    posAttr.setXYZ(3, p3.x, p3.y, p3.z);
+    posAttr.needsUpdate = true;
+    cube.geometry.computeVertexNormals();
+  }
 }
+
 
 // ============================================================
 // === Eye + Head scene
