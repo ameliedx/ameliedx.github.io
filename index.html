@@ -460,19 +460,9 @@ line.scale.z = 5;
 controller1.add(line.clone());
 controller2.add(line.clone());
 
-function updateControllers() {
-  [controller1, controller2].forEach(controller => {
-    if (controller.userData.selectedObject) {
-    const newPos = new THREE.Vector3();
-    newPos.setFromMatrixPosition(controller.matrixWorld);
-    controller.userData.selectedObject.position.copy(newPos);
-}
-
-  });
-}
 
 
-// === Sélection et déplacement VR ===
+
 function onSelectStart(e){
   const controller = e.target;
   tempMatrix.identity().extractRotation(controller.matrixWorld);
@@ -481,15 +471,31 @@ function onSelectStart(e){
 
   const intersects = raycaster.intersectObjects([scene.getObjectByName("Teapot")], true);
 
-  if(intersects.length>0){
+  if(intersects.length > 0){
     controller.userData.selectedObject = intersects[0].object;
+    // Stocke le décalage entre le point d'intersection et le centre
+    controller.userData.offset = intersects[0].point.clone().sub(intersects[0].object.position);
   }
 }
 
 function onSelectEnd(e){
   const controller = e.target;
   controller.userData.selectedObject = null;
+  controller.userData.offset = null;
 }
+
+function updateControllers() {
+  [controller1, controller2].forEach(controller => {
+    if (controller.userData.selectedObject) {
+      const newPos = new THREE.Vector3();
+      newPos.setFromMatrixPosition(controller.matrixWorld);
+      // Ajoute le décalage
+      newPos.sub(controller.userData.offset);
+      controller.userData.selectedObject.position.copy(newPos);
+    }
+  });
+}
+
 
 controller1.addEventListener('selectstart', onSelectStart);
 controller1.addEventListener('selectend', onSelectEnd);
