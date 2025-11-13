@@ -16,6 +16,7 @@
 <script src="https://unpkg.com/three@0.139.2/examples/js/controls/DragControls.js"></script>
 <script src="https://unpkg.com/three@0.139.2/examples/js/geometries/TeapotGeometry.js"></script>
 <script src="https://unpkg.com/three@0.139.2/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://unpkg.com/three@0.139.2/examples/jsm/webxr/XRControllerModelFactory.js"></script>
 
 <script>
 // ============================================================
@@ -71,6 +72,11 @@ let wallAngle = Math.PI / 2;
 const angleStep = THREE.MathUtils.degToRad(2);
 let xrSession = null;
 let vrRig;
+
+let controller1, controller2;
+const tempMatrix = new THREE.Matrix4();
+const raycaster = new THREE.Raycaster();
+let vrSelectableObjects = [];
 
 // ============================================================
 // === Helper rotation functions
@@ -226,6 +232,8 @@ function createScene() {
   teapot.position.z -= 70;
   scene.add(teapot);
 
+  vrSelectableObjects = [teapot]; // <-- La tasse est maintenant sélectionnable en VR
+
   const loader = new THREE.GLTFLoader();
   loader.load("anime_girl_model.glb", gltf => {
     const model = gltf.scene;
@@ -359,13 +367,63 @@ function animate() {
 }
 
 // ============================================================
-// === Rendu VR stéréoscopique
+// === VR functions
+// ============================================================
+function updateControllers() {
+  intersectObjects(controller1);
+  intersectObjects(controller2);
+
+  [controller1, controller2].forEach(controller => {
+    if (controller.userData.selectedObject) {
+      controller.userData.selectedObject.position.setFromMatrixPosition(controller.matrixWorld);
+    }
+  });
+}
+
+function intersectObjects(controller) {
+  const line = controller.getObjectByName("line");
+  if (controller.userData.selectedObject) return;
+
+  const intersections = getVRIntersections(controller);
+  if (intersections.length > 0) {
+    const intersect = intersections[0];
+    intersect.object.material.emissive.r = 1;
+    line.scale.z = intersect.distance;
+  } else {
+    line.scale.z = 5;
+    vrSelectableObjects.forEach(obj => obj.material.emissive.r = 0);
+  }
+}
+
+function getVRIntersections(controller) {
+  controller.updateMatrixWorld();
+  tempMatrix.identity().extractRotation(controller.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  raycaster.ray.direction.set(0,0,-1).applyMatrix4(tempMatrix);
+  return raycaster.intersectObjects(vrSelectableObjects, true);
+}
+
+function onSelectStart(event) {
+  const controller = event.target;
+  const intersections = getVRIntersections(controller);
+  if (intersections.length > 0) {
+    controller.userData.selectedObject = intersections[0].object;
+  }
+}
+
+function onSelectEnd(event) {
+  const controller = event.target;
+  controller.userData.selectedObject = null;
+}
+
+// ============================================================
+// === VR render
 // ============================================================
 function renderVR(delta) {
-    updateControllers();
-    const gl = renderer.getContext();
+  updateControllers();
+  const gl = renderer.getContext();
 
-  // --- Déplacement contrôleurs + raycasting ---
+  // --- déplacement contrôleurs ---
   const speed = 2.0;
   [controller1, controller2].forEach(controller => {
     const gp = controller.userData.gamepad;
@@ -380,21 +438,9 @@ function renderVR(delta) {
         vrRig.position.addScaledVector(side, x * delta * speed);
       }
     }
-
-    // Sélection objets
-    tempMatrix.identity().extractRotation(controller.matrixWorld);
-    raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-    raycaster.ray.direction.set(0,0,-1).applyMatrix4(tempMatrix);
-    const selectableObjects = [scene.getObjectByName("Teapot")];
-    const intersects = raycaster.intersectObjects(selectableObjects, true);
-
-    if (controller.userData.selectedObject) {
-      controller.userData.selectedObject.position.setFromMatrixPosition(controller.matrixWorld);
-    }
   });
 
-  // --- Rendu par mur ---
-  if (showScene) renderer.render(scene, camera); // scène principale (optionnel)
+  if (showScene) renderer.render(scene, camera);
 
   for (let [i, surf] of displaySurfaces.entries()) {
     renderer.setRenderTarget(displaySurfaceTargets[i]);
@@ -427,7 +473,6 @@ function renderVR(delta) {
   renderer.render(eyeScene, camera);
 }
 
-
 // ============================================================
 // === Init
 // ============================================================
@@ -440,68 +485,25 @@ createEyeScene();
 createScene();
 createCamera();
 
-// === VR Rig + Controllers (sélection d’objet simplifiée) ===
 vrRig = new THREE.Group();
 vrRig.name = "VRRig";
 vrRig.add(camera);
 scene.add(vrRig);
 
-const controller1 = renderer.xr.getController(0);
-const controller2 = renderer.xr.getController(1);
+controller1 = renderer.xr.getController(0);
+controller2 = renderer.xr.getController(1);
 vrRig.add(controller1);
 vrRig.add(controller2);
 
-// Raycaster + laser
-const raycaster = new THREE.Raycaster();
-const tempMatrix = new THREE.Matrix4();
 const lineGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)]);
-const line = new THREE.Line(lineGeometry, new THREE.LineBasicMaterial({color:0xffff00}));
-line.scale.z = 5;
-controller1.add(line.clone());
-controller2.add(line.clone());
-
-
-
-
-function onSelectStart(e){
-  const controller = e.target;
-  tempMatrix.identity().extractRotation(controller.matrixWorld);
-  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-  raycaster.ray.direction.set(0,0,-1).applyMatrix4(tempMatrix);
-
-  const intersects = raycaster.intersectObjects([scene.getObjectByName("Teapot")], true);
-
-  if(intersects.length > 0){
-    controller.userData.selectedObject = intersects[0].object;
-    // Stocke le décalage entre le point d'intersection et le centre
-    controller.userData.offset = intersects[0].point.clone().sub(intersects[0].object.position);
-  }
-}
-
-function onSelectEnd(e){
-  const controller = e.target;
-  controller.userData.selectedObject = null;
-  controller.userData.offset = null;
-}
-
-function updateControllers() {
-  [controller1, controller2].forEach(controller => {
-    if (controller.userData.selectedObject) {
-      const newPos = new THREE.Vector3();
-      newPos.setFromMatrixPosition(controller.matrixWorld);
-      // Ajoute le décalage
-      newPos.sub(controller.userData.offset);
-      controller.userData.selectedObject.position.copy(newPos);
-    }
-  });
-}
-
+const lineMaterial = new THREE.LineBasicMaterial({color:0xffff00});
+controller1.add(new THREE.Line(lineGeometry, lineMaterial.clone()).name="line");
+controller2.add(new THREE.Line(lineGeometry, lineMaterial.clone()).name="line");
 
 controller1.addEventListener('selectstart', onSelectStart);
 controller1.addEventListener('selectend', onSelectEnd);
 controller2.addEventListener('selectstart', onSelectStart);
 controller2.addEventListener('selectend', onSelectEnd);
-
 
 enableOrbitCamera(camera);
 addDragControlToObjects();
