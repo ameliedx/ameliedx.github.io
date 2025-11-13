@@ -2,14 +2,17 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>CAVE simulator (with WebXR)</title>
+<title>CAVE simulator</title>
   <link rel="stylesheet" crossorigin href="/assets/index-Dd6lRqA4.css">
 </head>
 <body>
 <div id="info">
 	CAVE Simulator. The head and teapot are draggable. <br />
-	"L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene  <br />
+	"L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene | "Left Arrow" to widen cave walls | "Right Arrow" to narrow cave walls | "M" to reset cave walls  <br />
 </div>
+
+<!-- Check: https://threejs.org/docs/index.html#manual/en/introduction/Installation 
+for alternative installations -->
 
 <script src="https://unpkg.com/three@0.139.2/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.139.2/examples/js/controls/OrbitControls.js"></script>
@@ -18,11 +21,10 @@
 <script src="https://unpkg.com/three@0.139.2/examples/js/loaders/GLTFLoader.js"></script>
 
 <script>
-/* ====================
-   DisplaySurface class (view + projection)
-   ==================== */
-class DisplaySurface {
-    constructor(name, origin, u_vector, v_vector) {
+class DisplaySurface 
+{
+    constructor(name, origin, u_vector, v_vector) 
+    {
         this.name = name;
         this.origin = origin;
         this.u = u_vector;
@@ -30,36 +32,37 @@ class DisplaySurface {
         this.b = true;
     }
 
-    viewMatrix(eye) {
+	viewMatrix(eye)
+	{
         const uHat = this.u.clone().normalize();
         const vHat = this.v.clone().normalize();
         const nHat = new THREE.Vector3().crossVectors(uHat, vHat).normalize();
 
-        // Up = direction of v on the surface
         const upVector = vHat.clone();
 
-        // Target is eye - n (look toward surface)
         const target = eye.clone().sub(nHat);
 
         var mat = new THREE.Matrix4();
         mat.lookAt(eye, target, upVector);
 
         const translate = new THREE.Matrix4().makeTranslation(-eye.x, -eye.y, -eye.z);
+
         mat.multiply(translate);
 
         return mat;
-    }
-
-    projectionMatrix(eye, znear, zfar) {
+	}
+	
+    projectionMatrix(eye, znear, zfar)
+    {
         const uHat = this.u.clone().normalize();
         const vHat = this.v.clone().normalize();
         const nHat = new THREE.Vector3().crossVectors(uHat, vHat).normalize();
 
-        const va = this.origin.clone().sub(eye);                    // bottom-left
-        const vb = this.origin.clone().add(this.u).sub(eye);        // bottom-right
-        const vc = this.origin.clone().add(this.v).sub(eye);        // top-left
+        const va = this.origin.clone().sub(eye);
+        const vb = this.origin.clone().add(this.u).sub(eye);
+        const vc = this.origin.clone().add(this.v).sub(eye);
 
-        const d = -va.dot(nHat); // positive distance from eye to plane along n
+        const d = -va.dot(nHat);
 
         const left   = (uHat.dot(va) * znear) / d;
         const right  = (uHat.dot(vb) * znear) / d;
@@ -68,169 +71,272 @@ class DisplaySurface {
 
         const proj = new THREE.Matrix4();
         proj.makePerspective(left, right, top, bottom, znear, zfar);
+
         return proj;
     }
 }
 
-/* ====================
-   Globals
-   ==================== */
+
 var renderer, scene, camera;
 var displaySurfaces, displaySurfaceScene, displaySurfaceTargets;
-var eyeCenter, eyeScene;
+var eyeCenter, eyeScene; 
 var orbitControl;
 var showScene = true;
-var xrSession = null;
+var wallAngle = Math.PI / 2;
+var angleStep = THREE.MathUtils.degToRad(2);
 
-/* ====================
-   Drag controls
-   ==================== */
-function addDragControlToObjects() {
+function rotatePointAroundAxis(P, B, axis, angle) {
+    const v = P.clone().sub(B);
+    v.applyAxisAngle(axis, angle);
+    return B.clone().add(v);
+}
+
+function rotateVectorAroundAxis(u, axis, angle) {
+    const v = u.clone();
+    v.applyAxisAngle(axis, angle);
+    return v;
+}
+
+
+function updateWallAngle() {
+    
+    const leftWall = displaySurfaces.find(d => d.name === "Left");
+    const rightWall = displaySurfaces.find(d => d.name === "Right");
+
+    const vBase = new THREE.Vector3(0, 300, 0);
+
+    const B_left = new THREE.Vector3(-150, -150, -150);
+    const axisY = new THREE.Vector3(0,1,0);
+    const A_base_left = new THREE.Vector3(-150, -150, +150);
+    const u_base_left = new THREE.Vector3(0,0,-300);
+    
+    const A_new_left = rotatePointAroundAxis(A_base_left, B_left, axisY, wallAngle - Math.PI/2);
+    const u_new_left = rotateVectorAroundAxis(u_base_left, axisY, wallAngle - Math.PI/2);
+
+    leftWall.origin.copy(A_new_left);
+    leftWall.u.copy(u_new_left);
+    leftWall.v.copy(vBase);
+
+
+    const rightOrigin = new THREE.Vector3(150, -150, -150);
+    const rightU = new THREE.Vector3(0, 0, 300);
+    rightU.applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2 - wallAngle);
+    
+    rightWall.origin.copy(rightOrigin);
+    rightWall.u.copy(rightU);
+    rightWall.v.copy(vBase);
+
+    for (let cube of displaySurfaceScene.children) {
+        const surf = displaySurfaces.find(d => d.name === cube.name);
+        
+        if (surf) {
+            let p0, p1, p2, p3;
+            
+            if (surf.name === "Floor") {
+                const v_BL = leftWall.origin;
+                
+                const v_FL = leftWall.origin.clone().add(leftWall.u);
+                
+                const v_FR = rightWall.origin;
+                
+                const v_BR = rightWall.origin.clone().add(rightWall.u);
+                p0 = v_BL;
+                p1 = v_BR;
+                p2 = v_FR;
+                p3 = v_FL;
+
+            } else {
+                const origin = surf.origin;
+                const u = surf.u;
+                const v = surf.v;
+                
+                p0 = origin;
+                p1 = origin.clone().add(u);
+                p2 = origin.clone().add(u).add(v);
+                p3 = origin.clone().add(v);
+            }
+            const positionAttribute = cube.geometry.getAttribute('position');
+            
+            positionAttribute.setXYZ(0, p0.x, p0.y, p0.z);
+            positionAttribute.setXYZ(1, p1.x, p1.y, p1.z);
+            positionAttribute.setXYZ(2, p2.x, p2.y, p2.z);
+            positionAttribute.setXYZ(3, p3.x, p3.y, p3.z);
+            
+            positionAttribute.needsUpdate = true;
+            
+            cube.geometry.computeVertexNormals();
+        }
+    }
+}
+
+
+
+function addDragControlToObjects()
+{
     var objects = [];
     objects.push(scene.getObjectByName("Teapot"));
     objects.push(eyeScene.getObjectByName("Head"));
-
-    var controls = new THREE.DragControls(objects, camera, renderer.domElement);
-    controls.addEventListener('hoveron', function (event) { orbitControl.enabled = false; } );
-    controls.addEventListener('hoveroff', function (event) { orbitControl.enabled = true; } );
-    controls.addEventListener('dragstart', function (event) { event.object.material.emissive.set(0xaaaaaa); } );
-    controls.addEventListener('dragend', function (event) { event.object.material.emissive.set(0x000000); } );
+    
+	//console.log(objects); 
+	
+    var controls = new THREE.DragControls( objects, camera, renderer.domElement );
+    controls.addEventListener( 'hoveron', function ( event ) 
+		{
+            orbitControl.enabled = false;
+        } );
+    controls.addEventListener( 'hoveroff', function ( event ) 
+	{
+            orbitControl.enabled = true;
+    } );
+	controls.addEventListener( 'dragstart', function ( event ) 
+		{
+            event.object.material.emissive.set( 0xaaaaaa );
+        } );
+    controls.addEventListener( 'dragend', function ( event ) 
+		{
+            event.object.material.emissive.set( 0x000000 );
+    } );
 }
 
-/* ====================
-   Eye scene (head + two eyes)
-   ==================== */
-function createEyeScene() {
-    var IPD = 6.8;
+function createEyeScene()
+{
+    var IPD = 6.8; 
     eyeCenter = new THREE.Vector3(50, 20, 50);
-    var eyeL = new THREE.Vector3(- IPD/2, 10, -6);
-    var eyeR = new THREE.Vector3(+ IPD/2, 10, -6);
-
+    // eye positions relative to the head
+    var eyeL = new THREE.Vector3( - IPD/2, 10, -6);
+    var eyeR = new THREE.Vector3( + IPD/2, 10, -6);
+    
     eyeScene = new THREE.Scene();
 
-    var geometry = new THREE.SphereGeometry(10, 32, 22);
-    var material = new THREE.MeshPhongMaterial({ color: 0xaaaaaa });
-    var head = new THREE.Mesh(geometry, material);
+    // add sphere representing head
+    var geometry = new THREE.SphereGeometry( 10, 32, 22 );
+    var material = new THREE.MeshPhongMaterial( { color: 0xaaaaaa } );
+    var head = new THREE.Mesh( geometry, material );
     head.name = "Head";
     head.position.set(eyeCenter.x, eyeCenter.y, eyeCenter.z);
     eyeScene.add(head);
 
-    var geometryEye = new THREE.SphereGeometry(3, 32, 22);
-    var materialL = new THREE.MeshPhongMaterial({ color: 0xff0000 });
-    var eyeMeshL = new THREE.Mesh(geometryEye, materialL);
-    eyeMeshL.name = "EyeL";
-    eyeMeshL.position.set(eyeL.x, eyeL.y, eyeL.z);
-    head.add(eyeMeshL);
-
-    var materialR = new THREE.MeshPhongMaterial({ color: 0x0000ff });
-    var eyeMeshR = new THREE.Mesh(geometryEye, materialR);
-    eyeMeshR.name = "EyeR";
-    eyeMeshR.position.set(eyeR.x, eyeR.y, eyeR.z);
-    head.add(eyeMeshR);
-
+    // add spheres representing L/R eyes
+    var geometry = new THREE.SphereGeometry( 3, 32, 22 );
+    var material = new THREE.MeshPhongMaterial( { color: 0xff0000 } );
+    var sphere = new THREE.Mesh( geometry, material );
+    sphere.name = "EyeL";
+    sphere.position.set(eyeL.x, eyeL.y, eyeL.z);
+    head.add(sphere);
+	
+    var geometry = new THREE.SphereGeometry( 3, 32, 22 );
+    var material = new THREE.MeshPhongMaterial( { color: 0x0000ff } );
+    var sphere = new THREE.Mesh( geometry, material );
+    sphere.name = "EyeR";
+    sphere.position.set(eyeR.x, eyeR.y, eyeR.z);
+	head.add(sphere);
+    
     createLights(eyeScene);
 }
 
-/* ====================
-   Renderer + WebXR setup
-   ==================== */
-function createRenderer() {
-    renderer = new THREE.WebGLRenderer({ preserveDrawingBuffer: true, antialias: true });
+function createRenderer()
+{
+    renderer = new THREE.WebGLRenderer({preserveDrawingBuffer: true});
     renderer.autoClear = false;
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.xr.enabled = true; // enable XR support in renderer
     document.body.appendChild(renderer.domElement);
-}
 
-/* Create a simple Enter VR button (lightweight, no external module) */
-function setupWebXRButton() {
-    const button = document.createElement('button');
-    button.style.position = 'absolute';
-    button.style.right = '10px';
-    button.style.bottom = '10px';
-    button.style.padding = '8px 12px';
-    button.style.zIndex = '999';
-    button.style.background = '#444';
-    button.style.color = '#fff';
-    button.style.border = 'none';
-    button.style.borderRadius = '4px';
-    button.style.cursor = 'pointer';
-    button.textContent = 'Enter VR';
+    // --- WebXR: enable and create a minimal Enter VR button (no external dependency) ---
+    renderer.xr.enabled = true;
 
-    // update supported state
-    if (navigator.xr) {
-        navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-            if (!supported) {
-                button.style.display = 'none';
+    // create a simple button for entering VR
+    function createEnterVRButton() {
+        const btn = document.createElement('button');
+        btn.style.position = 'absolute';
+        btn.style.bottom = '20px';
+        btn.style.left = '20px';
+        btn.style.padding = '8px 12px';
+        btn.style.background = '#222';
+        btn.style.color = '#fff';
+        btn.style.fontFamily = 'sans-serif';
+        btn.style.zIndex = 999;
+        btn.textContent = 'Enter VR';
+        btn.id = 'enter-vr-btn';
+
+        btn.onclick = async function () {
+            if (btn.dataset.xr === 'presenting') {
+                // end session
+                const session = renderer.xr.getSession();
+                if (session) await session.end();
+                return;
             }
-        }).catch(()=>{ button.style.display = 'none'; });
-    } else {
-        button.style.display = 'none';
-    }
 
-    button.addEventListener('click', async () => {
-        if (!xrSession) {
-            try {
-                const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'local'] });
-                await onSessionStarted(session);
-                button.textContent = 'Exit VR';
-            } catch (err) {
-                console.warn('Failed to start XR session:', err);
+            if (navigator.xr) {
+                try {
+                    const isSupported = await navigator.xr.isSessionSupported('immersive-vr');
+                    if (!isSupported) {
+                        alert('WebXR not supported on this device/browser.');
+                        return;
+                    }
+                } catch (e) {
+                    console.warn('XR support check failed:', e);
+                }
+                try {
+                    const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] });
+                    await renderer.xr.setSession(session);
+                } catch (err) {
+                    console.error('Failed to start XR session', err);
+                }
+            } else {
+                alert('WebXR API not available (secure context required or browser not supported).');
             }
-        } else {
-            await xrSession.end();
-        }
-    });
+        };
 
-    document.body.appendChild(button);
-}
+        document.body.appendChild(btn);
 
-async function onSessionStarted(session) {
-    xrSession = session;
-    renderer.xr.setSession(session);
-
-    // when XR session ends -> cleanup
-    session.addEventListener('end', () => {
-        xrSession = null;
-        // restore any states if needed
-    });
-
-    // request reference space (three.js handles internally but we keep this to be explicit)
-    try {
-        await session.requestReferenceSpace('local');
-    } catch (e) {
-        // ignore if not supported
+        // update button text on session start/end
+        renderer.xr.addEventListener('sessionstart', () => {
+            btn.textContent = 'Exit VR';
+            btn.dataset.xr = 'presenting';
+            if (orbitControl) orbitControl.enabled = false;
+        });
+        renderer.xr.addEventListener('sessionend', () => {
+            btn.textContent = 'Enter VR';
+            btn.dataset.xr = '';
+            if (orbitControl) orbitControl.enabled = true;
+        });
     }
+    createEnterVRButton();
+    // --- end WebXR block ---
 }
 
-/* ====================
-   Camera / lights / scene
-   ==================== */
-function enableOrbitCamera(cam, renderer) {
+function enableOrbitCamera(cam, renderer)
+{
     orbitControl = new THREE.OrbitControls(cam, renderer.domElement );
     orbitControl.minDistance = 120;
     orbitControl.maxDistance = 50000;
 }
 
-function createLights(scn) {
+function createLights(scn)
+{
     var ambientLight = new THREE.AmbientLight(0x888888, 0.4);
     scn.add(ambientLight);
     var pointLight = new THREE.PointLight(0xffffff, 0.8);
-    pointLight.position.z += 200;
+	pointLight.position.z += 200;
     scn.add(pointLight);
 }
 
-function createScene() {
+let mixer;
+
+function createScene()
+{
     scene = new THREE.Scene();
 
-    var geometry = new THREE.TeapotGeometry(40, 15);
-    var material = new THREE.MeshPhongMaterial({ color: 0xffffff });
+    var geometry = new THREE.TeapotGeometry( 40, 15);
+    var material = new THREE.MeshPhongMaterial( { color: 0xffffff } );
     var teapot = new THREE.Mesh(geometry, material);
     teapot.name = "Teapot";
-    teapot.position.z -= 70;
-    scene.add(teapot);
+    teapot.position.z-=70;
+    scene.add( teapot );
 
+    // TO REVIEW
     var loader = new THREE.GLTFLoader();
+
     loader.load("anime_girl_model.glb",
         function (gltf) {
             const model = gltf.scene;
@@ -244,255 +350,403 @@ function createScene() {
                 gltf.animations.forEach((clip) => {
                     mixer.clipAction(clip).play();
                 });
+                console.log("Animazioni trovate:", gltf.animations.length);
+            } else {
+                console.log("Nessuna animazione trovata nel modello");
             }
         },
-        function (xhr) { /* progress */ },
-        function (error) { console.error('GLTF load error', error); }
+        function (xhr) {
+            console.log((xhr.loaded / xhr.total * 100) + '% caricato');
+        },
+        function (error) {
+            console.error('Errore nel caricamento del modello:', error);
+        }
     );
-
+    // END TO REVIEW
+                
     createLights(scene);
 }
 
-function createDisplaySurfaceScene() {
+// create a scene with 3D objects representing the display surfaces
+function createDisplaySurfaceScene()
+{
     displaySurfaceScene = new THREE.Scene();
 
-    for (var [index, displaySurface] of displaySurfaces.entries()) {
+    // add display surfaces
+    for (var [index, displaySurface] of displaySurfaces.entries())
+    {
         var origin = displaySurface.origin;
         var u = displaySurface.u;
         var v = displaySurface.v;
+ 
+        const geometry = new THREE.BufferGeometry();
 
-        var geometry = new THREE.BoxGeometry(u.length(), v.length(), 0.01);
-        var material = new THREE.MeshPhongMaterial({ map: displaySurfaceTargets[index].texture });
-        var cube = new THREE.Mesh(geometry, material);
+        const p0 = origin.clone();
+        const p1 = origin.clone().add(u);
+        const p2 = origin.clone().add(u).add(v);
+        const p3 = origin.clone().add(v);
+
+        const vertices = new Float32Array([
+            p0.x, p0.y, p0.z,
+            p1.x, p1.y, p1.z,
+            p2.x, p2.y, p2.z,
+            p3.x, p3.y, p3.z
+        ]);
+
+        const indices = [0, 1, 3, 1, 2, 3];
+        
+        const uvs = new Float32Array([
+            0, 0,
+            1, 0,
+            1, 1,
+            0, 1
+        ]);
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        geometry.setIndex(indices);
+        geometry.computeVertexNormals();
+
+        geometry.getAttribute('position').setUsage(THREE.DynamicDrawUsage);
+
+        var material = new THREE.MeshPhongMaterial({
+            map: displaySurfaceTargets[index].texture,
+            side: THREE.DoubleSide
+        });
+        
+        var cube = new THREE.Mesh( geometry, material );
         cube.name = displaySurface.name;
-        if (displaySurface.name == "Left") cube.rotation.y = Math.PI / 2;
-        if (displaySurface.name == "Right") cube.rotation.y = - Math.PI / 2;
-        if (displaySurface.name == "Floor") {
-            cube.rotation.x = Math.PI / 2;
-            cube.rotation.z = Math.PI;
-        }
-
-        var uHalf = u.clone().multiplyScalar(0.5);
-        var vHalf = v.clone().multiplyScalar(0.5);
-        var center = new THREE.Vector3().addVectors(origin, uHalf);
-        center.add(vHalf);
-        cube.position.set(center.x, center.y, center.z);
-
+        
         displaySurfaceScene.add(cube);
     }
-
+    
     createLights(displaySurfaceScene);
 }
 
-function createDisplaySurfaceTargets() {
-    const SIZE = 1024;
+function createDisplaySurfaceTargets()
+{
+    const SIZE = 1024;  // texture resolution
     displaySurfaceTargets = [];
-    for (var v of displaySurfaces)
+    
+    for (var v of displaySurfaces)       
         displaySurfaceTargets.push(new THREE.WebGLRenderTarget(SIZE, SIZE));
 }
 
-function createCamera() {
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
-    camera.position.set(100, 100, 300);
-    camera.lookAt(0, 0, 0);
+
+function createCamera()
+{
+    camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 10000 );
+    camera.position.set( 100, 100, 300 );
+    camera.lookAt( 0, 0, 0 );
 }
 
-function createDisplaySurfaces() {
+function createDisplaySurfaces()
+{
     displaySurfaces = [];
-    var frontScreen = new DisplaySurface("Front",
-        new THREE.Vector3(-150.0, -150.0, -150.0),
-        new THREE.Vector3(300.0, 0.0, 0.0),
-        new THREE.Vector3(0.0, 300.0, 0.0));
+    // FRONT SCREEN
+    var frontScreen = new DisplaySurface("Front", 
+        new THREE.Vector3(-150.0, -150.0, -150.0), 
+        new THREE.Vector3(300.0, 0.0,   0.0), 
+        new THREE.Vector3(0.0, 300.0,   0.0));
     displaySurfaces.push(frontScreen);
 
+    // LEFT SCREEN
     var leftScreen = new DisplaySurface("Left",
-        new THREE.Vector3(-150.0, -150.0, 150.0),
-        new THREE.Vector3(0.0, 0.0, -300.0),
-        new THREE.Vector3(0.0, 300.0, 0.0));
+        new THREE.Vector3(-150.0, -150.0, 150.0), 
+        new THREE.Vector3(0.0, 0.0,  -300.0), 
+        new THREE.Vector3(0.0, 300.0,   0.0));
     displaySurfaces.push(leftScreen);
-
+	
+	// RIGHT SCREEN
     var rightScreen = new DisplaySurface("Right",
         new THREE.Vector3(150.0, -150.0, -150.0),
         new THREE.Vector3(0.0, 0.0, 300.0),
         new THREE.Vector3(0.0, 300.0, 0.0));
     displaySurfaces.push(rightScreen);
 
+    // FLOOR SCREEN
     var floorScreen = new DisplaySurface("Floor",
         new THREE.Vector3(-150.0, -150.0, 150.0),
         new THREE.Vector3(300.0, 0.0, 0.0),
         new THREE.Vector3(0.0, 0.0, -300.0));
     displaySurfaces.push(floorScreen);
+	
 }
 
-function getLeftEyePosition() {
+function getLeftEyePosition()
+{
     var eye = eyeScene.getObjectByName("EyeL");
     return eye.getWorldPosition(new THREE.Vector3());
 }
 
-function getRightEyePosition() {
+function getRightEyePosition()
+{
     var eye = eyeScene.getObjectByName("EyeR");
     return eye.getWorldPosition(new THREE.Vector3());
 }
 
-function cameraFromViewProj(view, proj) {
-    var cam = camera.clone();
+function cameraFromViewProj(view, proj)
+{
+	var cam = camera.clone();
     var inv = new THREE.Matrix4();
-    inv.copy(view).invert();
-    // set position from inverse matrix (elements 12,13,14)
-    cam.position.set(inv.elements[12], inv.elements[13], inv.elements[14]);
-    cam.setRotationFromMatrix(view);
-    cam.projectionMatrix = proj.clone();
-    return cam;
+	inv.copy(view).invert();
+	cam.position.set(inv.elements[12], inv.elements[13], inv.elements[14]);
+	cam.setRotationFromMatrix(view);
+	cam.projectionMatrix = proj.clone();
+	return cam;
 }
 
 const clock = new THREE.Clock();
-var mixer = null;
 
-/* ====================
-   Animation loop (renderer.setAnimationLoop used for XR compatibility)
-   ==================== */
+// --- WebXR helpers: controllers + eye sync ---
+let xrController1 = null, xrController2 = null;
 
-// === VR Camera Rig ===
-// This group represents the user's body in VR; it contains the camera and follows the headset.
+function setupXRControllersMinimal() {
+    // create simple controllers (no models) and basic grab behavior similar to drag
+    try {
+        xrController1 = renderer.xr.getController(0);
+        xrController1.addEventListener('selectstart', onXRSelectStart);
+        xrController1.addEventListener('selectend', onXRSelectEnd);
+        scene.add(xrController1);
 
+        xrController2 = renderer.xr.getController(1);
+        xrController2.addEventListener('selectstart', onXRSelectStart);
+        xrController2.addEventListener('selectend', onXRSelectEnd);
+        scene.add(xrController2);
 
-var animate = function (timestamp) {
+        // add a very simple visible line to each controller for pointing
+        const geometry = new THREE.BufferGeometry().setFromPoints([ new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1) ]);
+        const material = new THREE.LineBasicMaterial({ linewidth: 2 });
+        const line1 = new THREE.Line(geometry, material);
+        line1.name = 'xrPointerLine1';
+        line1.scale.z = 5;
+        xrController1.add(line1);
+
+        const line2 = new THREE.Line(geometry.clone(), material.clone());
+        line2.name = 'xrPointerLine2';
+        line2.scale.z = 5;
+        xrController2.add(line2);
+    } catch(e) {
+        console.warn('XR controllers initialization failed:', e);
+    }
+}
+
+const xrGrabbed = new Map();
+const xrTempMatrix = new THREE.Matrix4();
+function onXRSelectStart(evt) {
+    const ctrl = evt.target;
+    // simple raycast from controller
+    xrTempMatrix.identity().extractRotation(ctrl.matrixWorld);
+    const origin = new THREE.Vector3().setFromMatrixPosition(ctrl.matrixWorld);
+    const direction = new THREE.Vector3(0,0,-1).applyMatrix4(xrTempMatrix);
+    const ray = new THREE.Raycaster(origin, direction.normalize());
+    const intersects = ray.intersectObjects([scene.getObjectByName('Teapot'), scene.getObjectByName('Anime_girl')].filter(Boolean), true);
+    if (intersects.length > 0) {
+        let picked = intersects[0].object;
+        while (picked && !picked.isMesh) picked = picked.parent;
+        if (picked) {
+            ctrl.attach(picked);
+            xrGrabbed.set(ctrl, picked);
+        }
+    }
+}
+function onXRSelectEnd(evt) {
+    const ctrl = evt.target;
+    if (xrGrabbed.has(ctrl)) {
+        const obj = xrGrabbed.get(ctrl);
+        scene.attach(obj);
+        xrGrabbed.delete(ctrl);
+    }
+}
+
+function updateEyeSceneFromXR() {
+    if (!renderer || !renderer.xr) return;
+    if (!renderer.xr.isPresenting) return;
+    // renderer.xr.getCamera() is a Group with .cameras for each eye
+    const xrCamera = renderer.xr.getCamera();
+    if (xrCamera && xrCamera.cameras && xrCamera.cameras.length >= 2) {
+        const leftCam = xrCamera.cameras[0];
+        const rightCam = xrCamera.cameras[1];
+        const leftPos = new THREE.Vector3();
+        const rightPos = new THREE.Vector3();
+        leftCam.getWorldPosition(leftPos);
+        rightCam.getWorldPosition(rightPos);
+        const headPos = leftPos.clone().add(rightPos).multiplyScalar(0.5);
+        const head = eyeScene.getObjectByName("Head");
+        if (head) {
+            head.position.copy(headPos);
+            const xrQuat = new THREE.Quaternion();
+            xrCamera.getWorldQuaternion(xrQuat);
+            head.quaternion.copy(xrQuat);
+        }
+        const eyeL = eyeScene.getObjectByName("EyeL");
+        const eyeR = eyeScene.getObjectByName("EyeR");
+        if (eyeL && eyeR) {
+            // convert world eye positions to head local positions
+            head.worldToLocal(leftPos);
+            head.worldToLocal(rightPos);
+            eyeL.position.copy(leftPos);
+            eyeR.position.copy(rightPos);
+        }
+    } else {
+        // fallback: use xr camera world position for head
+        const pos = new THREE.Vector3();
+        xrCamera.getWorldPosition(pos);
+        const head = eyeScene.getObjectByName("Head");
+        if (head) head.position.copy(pos);
+    }
+}
+// --- end WebXR helpers ---
+
+// refresh function
+var animate = function () {
     var gl = renderer.getContext();
+    requestAnimationFrame(animate);
 
     const delta = clock.getDelta();
     if (mixer) mixer.update(delta);
 
-    // If in XR and presenting, sync head position with XR camera
-    if (renderer.xr && renderer.xr.isPresenting) {
-        // Get the Three.js XR camera (a Camera or ArrayCamera)
-        try {
-            const xrCamera = renderer.xr.getCamera();
-            const head = eyeScene.getObjectByName("Head");
-
-            if (xrCamera) {
-                // Extract position and rotation from the XR camera
-                const pos = new THREE.Vector3();
-                const rot = new THREE.Quaternion();
-                const scale = new THREE.Vector3();
-                xrCamera.matrixWorld.decompose(pos, rot, scale);
-
-                // Update VR rig position and rotation
-                vrRig.position.copy(pos);
-                vrRig.quaternion.copy(rot);
-            }
-
-            // Update the virtual head to follow the VR rig
-            if (head) {
-                head.position.copy(vrRig.position);
-                head.quaternion.copy(vrRig.quaternion);
-            }
-        } catch (e) {
-            // Ignore if not available
-        }
+    // 1. render scene objects
+	renderer.setClearColor(0x808080);
+    renderer.clear();
+    if (showScene)
+        renderer.render(scene, camera);
+    
+    // If XR session active, update eyeScene to headset pose
+    if (renderer && renderer.xr && renderer.xr.isPresenting) {
+        updateEyeSceneFromXR();
     }
 
-    // 1. Render main scene objects (third-person view)
-    renderer.setClearColor(0x808080);
-    renderer.clear();
-    if (showScene) renderer.render(scene, camera);
-
-    // 2. Render scene onto each display target (stereo)
-    for (let [index, displaySurface] of displaySurfaces.entries()) {
+    // 2. render scene objects onto a texture, for each target
+    for (let [index, displaySurface] of displaySurfaces.entries())
+    {
         renderer.setRenderTarget(displaySurfaceTargets[index]);
         renderer.setClearColor(0x404040);
         renderer.clear();
 
-        // Left eye -> RED channel
-        gl.colorMask(1, 0, 0, 0);
-        var eyeL = getLeftEyePosition();
-        var viewL = displaySurface.viewMatrix(eyeL);
-        var projL = displaySurface.projectionMatrix(eyeL, 1, 10000);
-        var leftCamera = cameraFromViewProj(viewL, projL);
-        renderer.render(scene, leftCamera);
-
-        // Right eye -> GREEN + BLUE channels
-        gl.colorMask(0, 1, 1, 0);
-        var eyeR = getRightEyePosition();
-        var viewR = displaySurface.viewMatrix(eyeR);
-        var projR = displaySurface.projectionMatrix(eyeR, 1, 10000);
-        var rightCamera = cameraFromViewProj(viewR, projR);
+		// left eye on RED channel
+        gl.colorMask(1, 0, 0, 0); 
+		var eye = getLeftEyePosition();
+		var view = displaySurface.viewMatrix(eye);
+		var proj = displaySurface.projectionMatrix(eye, 1, 1000);
+        var leftCamera = cameraFromViewProj(view, proj);
+        renderer.render(scene, leftCamera); 
+    
+		// right eye on GREEN, BLUE channels
+		gl.colorMask(0, 1, 1, 0);
+		var eye = getRightEyePosition();
+		var view = displaySurface.viewMatrix(eye);
+		var proj = displaySurface.projectionMatrix(eye, 1, 1000);
+        var rightCamera = cameraFromViewProj(view, proj);
         renderer.clearDepth();
-        renderer.render(scene, rightCamera);
-
+        renderer.render(scene, rightCamera); 
+		
         gl.colorMask(1, 1, 1, 0);
     }
-
+    // restore state
     renderer.setRenderTarget(null);
     renderer.setClearColor(0x000000);
-
-    // 3. Render textured display surfaces (the CAVE walls)
+  
+    // 3. render display surfaces as (textured) quads
     renderer.render(displaySurfaceScene, camera);
-
-    // 4. Render eyes/head
+	
+	// 4. render eyes
     renderer.render(eyeScene, camera);
-
-    // When using setAnimationLoop, do not call requestAnimationFrame here.
+	
 };
 
+// disable default three.js error if any; keep keyboard handling as before
+window.addEventListener( 'keydown', function ( event ) 
+{
+        switch ( event.code ) {
+            case 'KeyL': 
+                var eye = getLeftEyePosition();
+                camera.position.set(eye.x, eye.y, eye.z); 
+                break;
+                
+            case 'KeyR': 
+                var eye = getRightEyePosition();
+                camera.position.set(eye.x, eye.y, eye.z); 
+                break;
+                
+            case 'KeyS':
+                showScene = !showScene;
+                break;
+				
+			case 'KeyT':
+				var viewF = displaySurfaces[0].viewMatrix(new THREE.Vector3(50,20,100));
+				var viewL = displaySurfaces[1].viewMatrix(new THREE.Vector3(50,20,100));
+				var viewR = displaySurfaces[2].viewMatrix(new THREE.Vector3(50,20,100));
+				var viewB = displaySurfaces[3].viewMatrix(new THREE.Vector3(50,20,100));
+				console.log("View matrices:");
+				console.log(viewF);
+				console.log(viewL);
+				console.log(viewR);
+				console.log(viewB);
+                var projF1 = displaySurfaces[0].projectionMatrix(new THREE.Vector3(0,0,0), 1, 1000);
+				var projL1 = displaySurfaces[1].projectionMatrix(new THREE.Vector3(0,0,0), 1, 1000);
+				var projR1 = displaySurfaces[2].projectionMatrix(new THREE.Vector3(0,0,0), 1, 1000);
+				var projB1 = displaySurfaces[3].projectionMatrix(new THREE.Vector3(0,0,0), 1, 1000);
+				console.log("Projection matrices 1:");
+				console.log(projF1);
+				console.log(projL1);
+				console.log(projR1);
+				console.log(projB1);
+                var projF2 = displaySurfaces[0].projectionMatrix(new THREE.Vector3(50,20,100), 0.1, 100);
+				var projL2 = displaySurfaces[1].projectionMatrix(new THREE.Vector3(50,20,100), 0.1, 100);
+				var projR2 = displaySurfaces[2].projectionMatrix(new THREE.Vector3(50,20,100), 0.1, 100);
+				var projB2 = displaySurfaces[3].projectionMatrix(new THREE.Vector3(50,20,100), 0.1, 100);
+				console.log("Projection matrices 2:");
+				console.log(projF2);
+				console.log(projL2);
+				console.log(projR2);
+				console.log(projB2);
+				break;
 
-/* ====================
-   Keyboard events
-   ==================== */
-window.addEventListener('keydown', function (event) {
-    switch (event.code) {
-        case 'KeyL':
-            var eye = getLeftEyePosition();
-            camera.position.set(eye.x, eye.y, eye.z);
-            break;
-        case 'KeyR':
-            var eye = getRightEyePosition();
-            camera.position.set(eye.x, eye.y, eye.z);
-            break;
-        case 'KeyS':
-            showScene = !showScene;
-            break;
-        case 'KeyT':
-            var viewF = displaySurfaces[0].viewMatrix(new THREE.Vector3(50,20,100));
-            var viewL = displaySurfaces[1].viewMatrix(new THREE.Vector3(50,20,100));
-            console.log("View matrices:");
-            console.log(viewF);
-            console.log(viewL);
-            break;
-    }
+            case 'ArrowLeft':
+                wallAngle -= angleStep;
+                wallAngle = Math.max(THREE.MathUtils.degToRad(60), wallAngle);
+                updateWallAngle();
+                //console.log("Wall angle:", THREE.MathUtils.radToDeg(wallAngle).toFixed(1), "°");
+                break;
+
+            case 'ArrowRight':
+                wallAngle += angleStep;
+                wallAngle = Math.min(THREE.MathUtils.degToRad(120), wallAngle);
+                updateWallAngle();
+                //console.log("Wall angle:", THREE.MathUtils.radToDeg(wallAngle).toFixed(1), "°");
+                break;
+            case 'KeyM':
+                wallAngle = Math.PI / 2;
+                updateWallAngle();
+                break;
+                
+                    
+}
 });
 
-/* ====================
-   Init everything
-   ==================== */
-createRenderer();
-createDisplaySurfaces();
-createDisplaySurfaceTargets();
-createDisplaySurfaceScene();
-createEyeScene();
-createScene();
 
-var vrRig = new THREE.Group();
-vrRig.name = "VRRig";
-vrRig.add(camera);
-scene.add(vrRig);
+// initialize / setup
+createRenderer();  			// create WebGL renderer
+createDisplaySurfaces();	// Display surfaces
+createDisplaySurfaceTargets(); // Textures for the display surfaces
+createDisplaySurfaceScene();	// 3D objects for the display surfaces
+updateWallAngle();
+createEyeScene();	// spheres representing head + eyes
+createScene();		// some objects to test (teapot...)
+createCamera();		// a third-person camera
+enableOrbitCamera(camera, renderer);  // basic camera control
+addDragControlToObjects();	// allow some objects to be dragged
 
-createCamera();
-enableOrbitCamera(camera, renderer);
-addDragControlToObjects();
-setupWebXRButton();
+// --- WebXR: set up controllers after renderer is created ---
+if (renderer && renderer.xr) {
+    setupXRControllersMinimal();
+}
 
-// Use renderer.setAnimationLoop for both XR and non-XR rendering
-renderer.setAnimationLoop(animate);
+// Start main loop
+animate();
 
-/* ====================
-   Resize handling
-   ==================== */
-window.addEventListener('resize', function () {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-});
 
-</script>
-</body>
+		</script>
+    </body>
 </html>
