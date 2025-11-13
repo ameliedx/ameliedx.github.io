@@ -210,7 +210,36 @@ async function onSessionStarted(session) {
   xrSession = session;
   renderer.xr.setSession(session);
   session.addEventListener('end', () => { xrSession = null; });
-  await session.requestReferenceSpace('local');
+  const refSpace = await session.requestReferenceSpace('local');
+
+  renderer.xr.setReferenceSpace(refSpace);
+
+
+
+    // --- Crée le VR Rig ---
+    vrRig = new THREE.Group();
+    vrRig.name = "VRRig";
+    vrRig.add(camera);
+    scene.add(vrRig);
+
+    // --- Crée les contrôleurs ---
+    controller1 = renderer.xr.getController(0);
+    controller2 = renderer.xr.getController(1);
+    vrRig.add(controller1);
+    vrRig.add(controller2);
+
+    // --- Ajoute le rayon pour viser les objets ---
+    const lineGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)]);
+    const lineMaterial = new THREE.LineBasicMaterial({color:0xffff00});
+    controller1.add(new THREE.Line(lineGeometry, lineMaterial.clone()).name="line");
+    controller2.add(new THREE.Line(lineGeometry, lineMaterial.clone()).name="line");
+
+    // --- Événements VR pour sélectionner des objets ---
+    controller1.addEventListener('selectstart', onSelectStart);
+    controller1.addEventListener('selectend', onSelectEnd);
+    controller2.addEventListener('selectstart', onSelectStart);
+    controller2.addEventListener('selectend', onSelectEnd);
+
 }
 
 // ============================================================
@@ -370,6 +399,7 @@ function animate() {
 // === VR functions
 // ============================================================
 function updateControllers() {
+  if (!controller1 || !controller2) return; // <-- protection si pas prêts
   intersectObjects(controller1);
   intersectObjects(controller2);
 
@@ -379,6 +409,7 @@ function updateControllers() {
     }
   });
 }
+
 
 function intersectObjects(controller) {
   const line = controller.getObjectByName("line");
@@ -485,25 +516,6 @@ createEyeScene();
 createScene();
 createCamera();
 
-vrRig = new THREE.Group();
-vrRig.name = "VRRig";
-vrRig.add(camera);
-scene.add(vrRig);
-
-controller1 = renderer.xr.getController(0);
-controller2 = renderer.xr.getController(1);
-vrRig.add(controller1);
-vrRig.add(controller2);
-
-const lineGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)]);
-const lineMaterial = new THREE.LineBasicMaterial({color:0xffff00});
-controller1.add(new THREE.Line(lineGeometry, lineMaterial.clone()).name="line");
-controller2.add(new THREE.Line(lineGeometry, lineMaterial.clone()).name="line");
-
-controller1.addEventListener('selectstart', onSelectStart);
-controller1.addEventListener('selectend', onSelectEnd);
-controller2.addEventListener('selectstart', onSelectStart);
-controller2.addEventListener('selectend', onSelectEnd);
 
 enableOrbitCamera(camera);
 addDragControlToObjects();
